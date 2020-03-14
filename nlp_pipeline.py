@@ -177,6 +177,8 @@ class SimpleTokenizer():
 
 if __name__ == '__main__':
 	# create_datasets() # check
+	
 	for dataset in iter_datasets:
+		print('dora dura')
 		fit_opt_model(dataset)
 	
