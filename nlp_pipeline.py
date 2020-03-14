@@ -169,6 +169,7 @@ def fit_opt_model(df):
 
 class SimpleTokenizer():
 	def __init__(self, split_char):
+		print('Tokenizer initializated')
 		self.split_char = split_char
 
 	def tokenize(self, sent):
@@ -179,5 +180,5 @@ if __name__ == '__main__':
 	# create_datasets() # check
 	for dataset in iter_datasets:
 		fit_opt_model(dataset)
-		print('dora'+'dura')
+		
 	
