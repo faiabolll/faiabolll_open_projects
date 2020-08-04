@@ -33,6 +33,24 @@ else:
 translator = Translator()
 
 
+def bot_send_message(msg):
+    if TG_CONNECTION:
+        try:
+            bot.send_message(ME, msg)
+        except Exception as e:
+            print(e)
+    else:
+        print('Connection to bot is unavailable')
+
+
+class ParserFunctionError(Exception):
+    def __init__(self, exception_text, **details):
+        super().__init__(exception_text)
+        msg = """In "{}" function while "{}" from "{}" was parsing exception raised:""".\
+            format(details["function_name"], details["team_name"], details["league_name"])
+        print(msg)
+        bot_send_message(msg)
+
 class ProxyList():
     def __init__(self, path):
         with open(path, 'r') as f:
@@ -46,7 +64,6 @@ class ProxyList():
 		Return randomly chosen proxy from proxy list
 		"""
         return random.choice(self.proxy_list)
-
 
 
 class Database:
@@ -72,13 +89,17 @@ class Database:
         else:
             raise AttributeError("invalid value for database type")
 
-    def store_json(self, data):
-        pass
 
-
-class DatabaseSQL(Database):
+class DatabaseSQL():
     def __init__(self):
         super().__init__()
+        self.conn = sql_db.connect(conn_info)
+        self.cur = self.sql_db.cursor()
+        # creating id_table
+        query = """CREATE TABLE IF NOT EXISTS
+         id_table (name VARCHAR(50), id INT PRIMARY KEY);"""
+        self.cur.execute(query)
+
 
     def construct_sql_row(self, row, stat_key, stat_value):
         if stat_key == 'parts':
@@ -122,7 +143,7 @@ class DatabaseSQL(Database):
             try:
                 delete_query = """DROP TABLE stat_table"""
                 self.cur.execute(delete_query)
-                self.sql_db.commit()
+                self.conn.commit()
             except:
                 self.sql_db.rollback()
                 trans = lambda x: re.sub(r'\s|\)|\(|\+|\.|\-|\<', '_',
@@ -132,11 +153,11 @@ class DatabaseSQL(Database):
                 dtypes = '(' + ', '.join(dtypes) + ')'
                 stat_table_create = "CREATE TABLE IF NOT EXISTS stat_table " + dtypes
                 self.cur.execute(stat_table_create)
-                self.sql_db.commit()
+                self.conn.commit()
         values = str(tuple([str(self.date)] + [col[1] for col in row]))
         add_query = """INSERT INTO stat_table VALUES %s""" % values
         self.cur.execute(add_query)
-        self.sql_db.commit()
+        self.conn.commit()
 
     def add_row_in_matches(self, row, team_name):
 
@@ -148,7 +169,7 @@ class DatabaseSQL(Database):
                 delete_query = """DROP TABLE matches_table"""
                 self.cur.execute(delete_query)
             except:
-                self.sql_db.rollback()
+                self.conn.rollback()
                 matches_table_create = """CREATE TABLE IF NOT EXISTS matches_table (
                 day_collected TEXT, match_date TEXT, league TEXT, team TEXT, opponent TEXT,
                 is_forecast TEXT, match_score TEXT, first_score TEXT, match_result TEXT);"""
@@ -183,6 +204,32 @@ class DatabaseSQL(Database):
         self.sql_db.commit()
 
 
+class DatabaseNosql():
+    def __init__(self):
+        super().__init__()
+        client = MongoClient()
+        self.nosql_db = client['faiabolll']
+        self.nosql_coll = self.nosql_db['football']
+
+    def store(self, data):
+        dict_to_save = {league_name_to_save: data}
+        saved = True
+        # give it 10 tries if it can save with first time
+        for i in range(10):
+            try:
+                self.nosql_coll.insert_one(dict_to_save)
+            except Exception as e:
+                print(f'Happened {e} in nosql saving; waitting 3 secs')
+                time.sleep(3)
+            else:
+                break
+            if i == 9:
+                saved = False
+        if not saved:
+            self.save_format = 'json'
+            self.save_league(to_save, league_name_to_save)
+            self.save_format = 'nosql'
+
 
 
 class Parser():
@@ -192,9 +239,6 @@ class Parser():
         chrome_options = webdriver.ChromeOptions()
         chrome_options.add_argument('--proxy-server=%s' % proxy)
         self.driver = webdriver.Chrome(chrome_options=chrome_options)
-
-
-
 
 
 class NbBetParser(object):
@@ -249,14 +293,12 @@ class NbBetParser(object):
 
     def start_parse(self, save_format='json'):
         self.save_format = save_format
-
         try:
             self.driver.get(self.initial)
         except:
             print('Page is not exist')
             return
 
-        self.connect_to_db()
 
         try:
             league_selector = WebDriverWait(self.driver, 10).until(
@@ -354,37 +396,6 @@ class NbBetParser(object):
                 print(f'{path} saved...')
                 json.dump(to_save, f)
 
-        elif self.save_format == 'sql':
-            to_save = to_save[list(to_save.keys())[0]]
-            for team, stats in to_save.items():
-                for day_collected, stat in stats.items():
-                    # day_collected = datetime.datetime.strptime(day_collected, '%Y-%m-%d')
-                    in_stat_add = {}
-                    for stat_key, stat_value in stat.items():
-                        if 'past' in stat_key or 'fut' in stat_key:
-                            self.add_row_in_matches(stat_value, team)
-                        else:
-                            if stat_key == 'parts':
-                                v = re.split(r',\s', stat_value)
-                                v = [re.sub(r',', '.', i) for i in v]
-                                v = [i.split(':') for i in v]
-                                v = [[i[0], i[1][1:]] for i in v]
-                                for i in v:
-                                    in_stat_add.update({i[0]: i[1]})
-                            elif stat_key == 'scored_missed':
-                                in_stat_add.update({'scored1': stat_value[0]})
-                                in_stat_add.update({'missed1': stat_value[1]})
-                            elif stat_key == 'wdl':
-                                in_stat_add.update({'win1': stat_value[0]})
-                                in_stat_add.update({'draw1': stat_value[1]})
-                                in_stat_add.update({'lose1': stat_value[2]})
-                            elif len(stat_value) == 1:
-                                in_stat_add.update({stat_key: stat_value})
-                            elif len(stat_value) == 2 and stat_value[1] == '':
-                                in_stat_add.update({stat_key: stat_value[0]})
-                            elif len(stat_value) == 2:
-                                in_stat_add.update({stat_key: stat_value[1]})
-                    self.add_row_in_stat(in_stat_add)
 
         elif self.save_format == 'nosql':
             # key = list(to_save.keys())[0]
@@ -446,42 +457,71 @@ class NbBetParser(object):
             self.change_period(self.change_period_to)
 
         date_of_stats = {}
+        self.wait_to_click(0.5, 0.05)
+
         try:
-            self.wait_to_click(0.5, 0.05)
             title = self.parse_title()
-            stats = self.parse_stats()
-            self.wait_to_click()
-            series = self.parse_series()
-            self.wait_to_click(0.5, 0.05)
-            past_results = self.parse_past_results()
-            self.wait_to_click(0.5, 0.05)
-            schedule = self.parse_schedule()
-            time = str(datetime.datetime.now())
-            print(self.current_team, 'from', self.current_league, 'parsed at',
-                  time)  # self.current_team is determined in parse_title
-            all_stats = {**title, **stats, **series, **past_results, **schedule}
-            date_of_stats = {self.date: all_stats}
         except Exception as e:
-            msg = f'{e} occured in parse_team()\n{self.current_team} from {self.current_league}'
-            print(msg)
-            self.bot_send_message(msg)
+            raise ParserFunctionError(e, function_name="parse_title",
+                                      team_name=self.current_team,
+                                      league_name=self.current_league)
+
+        try:
+            stats = self.parse_stats()
+        except Exception as e:
+            raise ParserFunctionError(e, function_name="parse_stats",
+                                      team_name=self.current_team,
+                                      league_name=self.current_league)
+        else:
+            self.wait_to_click()
+
+        try:
+            series = self.parse_series()
+        except Exception as e:
+            raise ParserFunctionError(e, function_name="parse_series",
+                                      team_name=self.current_team,
+                                      league_name=self.current_league)
+        else:
+            self.wait_to_click(0.5, 0.05)
+
+        try:
+            past_results = self.parse_past_results()
+        except Exception as e:
+            raise ParserFunctionError(e, function_name="parse_past_results",
+                                      team_name=self.current_team,
+                                      league_name=self.current_league)
+        else:
+            self.wait_to_click(0.5, 0.05)
+
+        try:
+            schedule = self.parse_schedule()
+        except Exception as e:
+            raise ParserFunctionError(e, function_name="parse_title_schedule",
+                                      team_name=self.current_team,
+                                      league_name=self.current_league)
+
+        time = str(datetime.datetime.now())
+        print(self.current_team, 'from', self.current_league, 'parsed at',
+              time)  # self.current_team is determined in parse_title
+        all_stats = {**title, **stats, **series, **past_results, **schedule}
+        date_of_stats = {self.date: all_stats}
+
         return {self.current_team: date_of_stats}
 
     def parse_title(self):
         self.current_team = self.driver.find_element_by_xpath("//div[@id='MainContent_pnlContent']/h2").text
         position = self.driver.find_element_by_xpath("//div[@id='MainContent_pnlContent']/div[4]/span").text
         position = position.split(' ')[-1]
-        WDL = self.driver.find_element_by_xpath("//div[@id='MainContent_pnlContent']/div[5]")
-        WDL = WDL.find_elements_by_tag_name("strong")
-        WDL = [n.text for n in WDL]
+        wdl = self.driver.find_element_by_xpath("//div[@id='MainContent_pnlContent']/div[5]")
+        wdl = wdl.find_elements_by_tag_name("strong")
+        wdl = [n.text for n in wdl]
         scored_missed = self.driver.find_element_by_xpath("//div[@id='MainContent_pnlContent']/div[6]/span")
         scored_missed = scored_missed.find_elements_by_tag_name("strong")
         scored_missed = [sm.text for sm in scored_missed[-2:]]
         parts = self.driver.find_element_by_xpath("//div[@id='MainContent_pnlContent']/div[7]").text
-        return {'wdl': WDL, 'scored_missed': scored_missed, 'parts': parts}
+        return {'wdl': wdl, 'scored_missed': scored_missed, 'parts': parts}
 
     def parse_stats(self):
-
         stats = {}
         table_cell = self.driver.find_element_by_id("MainContent_TabContainer_body")
 
@@ -502,11 +542,14 @@ class NbBetParser(object):
 
     def parse_series(self):
         series = {}
+
         series_button = self.driver.find_element_by_id("MainContent_TabContainer_ctl03_tab")
         series_button.click()
-        tabel_container = self.driver.find_element_by_id("MainContent_TabContainer_ctl03")
-        trs1 = tabel_container.find_elements_by_class_name("tournaments-stats-cells1")
-        trs2 = tabel_container.find_elements_by_class_name("tournaments-stats-cells2")
+
+        table_container = self.driver.find_element_by_id("MainContent_TabContainer_ctl03")
+        trs1 = table_container.find_elements_by_class_name("tournaments-stats-cells1")
+        trs2 = table_container.find_elements_by_class_name("tournaments-stats-cells2")
+
         for tr in trs1:
             tds = tr.find_elements_by_tag_name('td')
             tds = list(map(lambda x: re.sub(r'\.', '_', x.text), tds))
@@ -523,8 +566,8 @@ class NbBetParser(object):
         results_button = self.driver.find_element_by_id("__tab_MainContent_TabContainer_tpResults")
         results_button.click()
 
-        tabel_container = self.driver.find_element_by_id("MainContent_TabContainer_tpResults")
-        trs = tabel_container.find_elements_by_class_name("rows-border-top")
+        table_container = self.driver.find_element_by_id("MainContent_TabContainer_tpResults")
+        trs = table_container.find_elements_by_class_name("rows-border-top")
         for i, tr in enumerate(trs):
             tds = tr.find_elements_by_tag_name('td')
             extract_td_data = lambda x: x.text
@@ -547,8 +590,8 @@ class NbBetParser(object):
             # assuming situation that first leagues and teams parsed succefully and created tables
             schedule = {'n' + str(i): 'NULL' for i in range(self.n_columns_schedule)}
         else:
-            tabel_container = self.driver.find_element_by_id("MainContent_TabContainer_tpSchedule")
-            trs = tabel_container.find_elements_by_class_name("rows-border-top")
+            table_container = self.driver.find_element_by_id("MainContent_TabContainer_tpSchedule")
+            trs = table_container.find_elements_by_class_name("rows-border-top")
             for i, tr in enumerate(trs):
                 tds = tr.find_elements_by_tag_name('td')
                 extract_td_data = lambda x: x.text
@@ -562,20 +605,10 @@ class NbBetParser(object):
                 schedule.update({'fut' + str(i): tr_info})
                 # for no-schedule-exception
                 self.n_columns_schedule = len(tr_info)
+
         return schedule
 
-
-
-    def bot_send_message(self, msg):
-        if TG_CONNECTION:
-            try:
-                bot.send_message(ME, msg)
-            except Exception as e:
-                print(e)
-        else:
-            print('Connection to bot is unavailable')
-
-    def wait_to_click(self, m=2, s=0.2):
+    def wait_to_click(self, m=2.0, s=0.2):
         sleep(random.gauss(m, s))
 
     def change_period(self):
