@@ -1,0 +1,40 @@
+DRIVE_PATH: /content/drive/MyDrive/yolo
+drive_image_source_id: 1wfV2x_A68K3fezn94-uTP2thH0ZuDyJv
+source_images_folder:
+  - data
+  - images
+detection:
+  weights_path:
+  - detect
+  - train
+  - exp
+  - weights
+  - best.pt
+  conf_thres: 0.8
+  images_folder: 
+  - detect
+  - detect buffer
+  source_images_folder:
+  - data
+  - images
+  imgsz:
+  - 1080
+  - 1080
+  iou_thres: 0.6
+  project_path: 
+  - detect
+  - detect
+  runs/detect_folder_id: 16Tn1bYhKF5QQ-bdbnZj4tbtcrVJJLKJE
+  runs/train_folder_id: 1Fy0fWxq83mQxCdjonzEW7lB1y_747fvE
+  runs_folder_id: 1NAPAEuteLCTVA89wHeCgcYP50LOmLRDi
+  save_conf: true
+  save_txt: true
+regression:
+  project_path:
+  - regresssion
+  runs_folder_id: 1NAPAEuteLCTVA89wHeCgcYP50LOmLRDi
+  runs/train_folder_id: 1YtAVXafgTbkp65YCiv9uqSm01qIFghMF
+  runs/test_folder_id: 1-sWYaPeK-LJVrB-98uXxV5Lncgibg_bk
+  source_images_folder:
+  - data
+  - images
